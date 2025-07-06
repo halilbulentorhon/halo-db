@@ -2,7 +2,6 @@ package btree
 
 import (
 	"errors"
-	"halo-db/pkg/bloom"
 	"halo-db/pkg/types"
 )
 
@@ -12,33 +11,21 @@ type BTree interface {
 	Insert(key types.Key, value types.Value) error
 	Find(key types.Key) (types.Value, error)
 	Delete(key types.Key) error
-	SkipBloomFilter(skip bool)
 	List() []types.Key
 }
 
 type bPlusTree struct {
-	root        *node
-	bloomFilter *bloom.BloomFilter
-	skipBloom   bool
+	root *node
 }
 
 func NewBPlusTree() BTree {
-	size := bloom.EstimateSize(1000, 0.01)
-	hashFuncs := bloom.EstimateHashFunctions(size, 1000)
-	return &bPlusTree{
-		bloomFilter: bloom.NewBloomFilter(size, hashFuncs),
-	}
-}
-
-func (t *bPlusTree) SkipBloomFilter(skip bool) {
-	t.skipBloom = skip
+	return &bPlusTree{}
 }
 
 func (t *bPlusTree) Insert(key types.Key, value types.Value) error {
 	if t.root == nil {
 		t.root = newLeafNode()
 		t.root.InsertKeyValue(key, value)
-		t.bloomFilter.Add(key)
 		return nil
 	}
 
@@ -49,21 +36,13 @@ func (t *bPlusTree) Insert(key types.Key, value types.Value) error {
 
 	if !leaf.IsFull() {
 		leaf.InsertKeyValue(key, value)
-		t.bloomFilter.Add(key)
 		return nil
 	}
 
-	if err := t.insertIntoLeafAfterSplitting(leaf, key, value); err != nil {
-		return err
-	}
-	t.bloomFilter.Add(key)
-	return nil
+	return t.insertIntoLeafAfterSplitting(leaf, key, value)
 }
 
 func (t *bPlusTree) Find(key types.Key) (types.Value, error) {
-	if !t.skipBloom && !t.bloomFilter.Contains(string(key)) {
-		return nil, ErrKeyNotFound
-	}
 	if t.root == nil {
 		return nil, ErrKeyNotFound
 	}
@@ -89,7 +68,6 @@ func (t *bPlusTree) Delete(key types.Key) error {
 	}
 
 	if leaf.DeleteKey(key) {
-		t.bloomFilter.Clear()
 		return nil
 	}
 	return ErrKeyNotFound

@@ -5,28 +5,34 @@ import (
 	"math"
 )
 
-type BloomFilter struct {
+type BloomFilter interface {
+	Add(key string)
+	Contains(key string) bool
+	Clear()
+}
+
+type bloomFilter struct {
 	bits     []bool
 	size     uint
 	hashFunc uint
 }
 
-func NewBloomFilter(size uint, hashFunc uint) *BloomFilter {
-	return &BloomFilter{
+func NewBloomFilter(size uint, hashFunc uint) BloomFilter {
+	return &bloomFilter{
 		bits:     make([]bool, size),
 		size:     size,
 		hashFunc: hashFunc,
 	}
 }
 
-func (bf *BloomFilter) Add(key string) {
+func (bf *bloomFilter) Add(key string) {
 	for i := uint(0); i < bf.hashFunc; i++ {
 		index := bf.hash(key, i) % bf.size
 		bf.bits[index] = true
 	}
 }
 
-func (bf *BloomFilter) Contains(key string) bool {
+func (bf *bloomFilter) Contains(key string) bool {
 	for i := uint(0); i < bf.hashFunc; i++ {
 		index := bf.hash(key, i) % bf.size
 		if !bf.bits[index] {
@@ -36,13 +42,13 @@ func (bf *BloomFilter) Contains(key string) bool {
 	return true
 }
 
-func (bf *BloomFilter) Clear() {
+func (bf *bloomFilter) Clear() {
 	for i := range bf.bits {
 		bf.bits[i] = false
 	}
 }
 
-func (bf *BloomFilter) hash(key string, seed uint) uint {
+func (bf *bloomFilter) hash(key string, seed uint) uint {
 	h := fnv.New64a()
 	h.Write([]byte(key))
 	h.Write([]byte{byte(seed)})

@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"halo-db/pkg/bloom"
 	"halo-db/pkg/btree"
 	"halo-db/pkg/memtable"
 	"halo-db/pkg/types"
@@ -21,12 +22,13 @@ type Store interface {
 }
 
 type store struct {
-	tree     btree.BTree
-	memtable memtable.Memtable
-	wal      wal.WAL
-	dataDir  string
-	mu       sync.RWMutex
-	stopChan chan struct{}
+	tree        btree.BTree
+	memtable    memtable.Memtable
+	wal         wal.WAL
+	bloomFilter bloom.BloomFilter
+	dataDir     string
+	mu          sync.RWMutex
+	stopChan    chan struct{}
 }
 
 func NewStore(dataDir string) (Store, error) {
@@ -38,12 +40,17 @@ func NewStore(dataDir string) (Store, error) {
 		return nil, fmt.Errorf("failed to create WAL: %w", err)
 	}
 
+	size := bloom.EstimateSize(1000, 0.01)
+	hashFuncs := bloom.EstimateHashFunctions(size, 1000)
+	bloomFilter := bloom.NewBloomFilter(size, hashFuncs)
+
 	store := &store{
-		tree:     tree,
-		memtable: mTable,
-		wal:      w,
-		dataDir:  dataDir,
-		stopChan: make(chan struct{}),
+		tree:        tree,
+		memtable:    mTable,
+		wal:         w,
+		bloomFilter: bloomFilter,
+		dataDir:     dataDir,
+		stopChan:    make(chan struct{}),
 	}
 
 	if err := store.replayWAL(); err != nil {
@@ -64,6 +71,7 @@ func (s *store) Put(key types.Key, value types.Value) error {
 	}
 
 	s.memtable.Put(key, value)
+	s.bloomFilter.Add(key)
 
 	if s.memtable.IsFull() {
 		if err := s.flushMemtable(); err != nil {
@@ -83,6 +91,10 @@ func (s *store) Get(key types.Key) (types.Value, error) {
 			return nil, fmt.Errorf("key not found")
 		}
 		return value, nil
+	}
+
+	if !s.bloomFilter.Contains(key) {
+		return nil, fmt.Errorf("key not found")
 	}
 
 	return s.tree.Find(key)
@@ -148,6 +160,7 @@ func (s *store) Clear() error {
 
 	s.tree = btree.NewBPlusTree()
 	s.memtable.Clear()
+	s.bloomFilter.Clear()
 
 	return nil
 }
@@ -160,6 +173,7 @@ func (s *store) flushMemtable() error {
 			if err := s.tree.Insert(entry.Key, entry.Value); err != nil {
 				return fmt.Errorf("failed to insert into B+ tree: %w", err)
 			}
+			s.bloomFilter.Add(string(entry.Key))
 		} else {
 			if err := s.tree.Delete(entry.Key); err != nil {
 				return fmt.Errorf("failed to delete from B+ tree: %w", err)
@@ -193,11 +207,12 @@ func (s *store) backgroundFlush() {
 }
 
 func (s *store) replayWAL() error {
-	s.tree.SkipBloomFilter(true)
-	defer s.tree.SkipBloomFilter(false)
-
 	insertHandler := func(key types.Key, value types.Value) error {
-		return s.tree.Insert(key, value)
+		if err := s.tree.Insert(key, value); err != nil {
+			return err
+		}
+		s.bloomFilter.Add(key)
+		return nil
 	}
 
 	deleteHandler := func(key types.Key) error {
