@@ -72,16 +72,7 @@ func (m *memtable) Get(key types.Key) (types.Value, bool) {
 }
 
 func (m *memtable) Delete(key types.Key) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	pos := sort.Search(len(m.entries), func(i int) bool {
-		return m.entries[i].Key >= key
-	})
-
-	if pos < len(m.entries) && m.entries[pos].Key == key {
-		m.entries = append(m.entries[:pos], m.entries[pos+1:]...)
-	}
+	m.Put(key, nil)
 }
 
 func (m *memtable) GetAllEntries() []Entry {

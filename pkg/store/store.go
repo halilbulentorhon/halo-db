@@ -173,11 +173,9 @@ func (s *store) flushMemtable() error {
 			if err := s.tree.Insert(entry.Key, entry.Value); err != nil {
 				return fmt.Errorf("failed to insert into B+ tree: %w", err)
 			}
-			s.bloomFilter.Add(string(entry.Key))
+			s.bloomFilter.Add(entry.Key)
 		} else {
-			if err := s.tree.Delete(entry.Key); err != nil {
-				return fmt.Errorf("failed to delete from B+ tree: %w", err)
-			}
+			_ = s.tree.Delete(entry.Key)
 		}
 	}
 
@@ -216,7 +214,8 @@ func (s *store) replayWAL() error {
 	}
 
 	deleteHandler := func(key types.Key) error {
-		return s.tree.Delete(key)
+		_ = s.tree.Delete(key)
+		return nil
 	}
 
 	return s.wal.Replay(insertHandler, deleteHandler)

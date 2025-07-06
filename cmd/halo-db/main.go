@@ -8,6 +8,7 @@ import (
 	"halo-db/pkg/types"
 	"os"
 	"strings"
+	"unicode"
 )
 
 func main() {
@@ -25,6 +26,7 @@ func main() {
 
 	fmt.Printf("HaloDB - Partitioned Key-Value Store (%d partitions)\n", constants.NumPartitions)
 	fmt.Println("Commands: put <key> <value>, get <key>, delete <key>, list, clear, stats, tree, quit")
+	fmt.Println("Note: Use quotes for values with spaces: put key \"value with spaces\"")
 	fmt.Println()
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -39,7 +41,7 @@ func main() {
 			continue
 		}
 
-		parts := strings.Fields(input)
+		parts := parseCommand(input)
 		if len(parts) == 0 {
 			continue
 		}
@@ -51,6 +53,7 @@ func main() {
 		case "put":
 			if len(parts) != 3 {
 				fmt.Println("Usage: put <key> <value>")
+				fmt.Println("Example: put user:1925 \"Halil Bülent Orhon\"")
 				continue
 			}
 			key := parts[1]
@@ -111,4 +114,44 @@ func main() {
 			fmt.Printf("Unknown command: %s\n", command)
 		}
 	}
+}
+
+func parseCommand(input string) []string {
+	var parts []string
+	var current strings.Builder
+	inQuotes := false
+	escapeNext := false
+
+	for _, r := range input {
+		if escapeNext {
+			current.WriteRune(r)
+			escapeNext = false
+			continue
+		}
+
+		if r == '\\' {
+			escapeNext = true
+			continue
+		}
+
+		if r == '"' {
+			inQuotes = !inQuotes
+			continue
+		}
+
+		if unicode.IsSpace(r) && !inQuotes {
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+		} else {
+			current.WriteRune(r)
+		}
+	}
+
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+
+	return parts
 }
