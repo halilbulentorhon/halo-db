@@ -12,23 +12,33 @@ type Entry struct {
 	Value types.Value
 }
 
-type Memtable struct {
+type Memtable interface {
+	Put(key types.Key, value types.Value)
+	Get(key types.Key) (types.Value, bool)
+	Delete(key types.Key)
+	GetAllEntries() []Entry
+	GetSize() int
+	IsFull() bool
+	Clear()
+}
+
+type memtable struct {
 	entries []Entry
 	size    int
 	mu      sync.RWMutex
 }
 
-func NewMemtable(size int) *Memtable {
+func NewMemtable(size int) Memtable {
 	if size <= 0 {
 		size = constants.MemtableSize
 	}
-	return &Memtable{
+	return &memtable{
 		entries: make([]Entry, 0),
 		size:    size,
 	}
 }
 
-func (m *Memtable) Put(key types.Key, value types.Value) {
+func (m *memtable) Put(key types.Key, value types.Value) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -46,7 +56,7 @@ func (m *Memtable) Put(key types.Key, value types.Value) {
 	m.entries[pos] = Entry{Key: key, Value: value}
 }
 
-func (m *Memtable) Get(key types.Key) (types.Value, bool) {
+func (m *memtable) Get(key types.Key) (types.Value, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -61,7 +71,7 @@ func (m *Memtable) Get(key types.Key) (types.Value, bool) {
 	return nil, false
 }
 
-func (m *Memtable) Delete(key types.Key) {
+func (m *memtable) Delete(key types.Key) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -74,7 +84,7 @@ func (m *Memtable) Delete(key types.Key) {
 	}
 }
 
-func (m *Memtable) GetAllEntries() []Entry {
+func (m *memtable) GetAllEntries() []Entry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -83,17 +93,17 @@ func (m *Memtable) GetAllEntries() []Entry {
 	return result
 }
 
-func (m *Memtable) GetSize() int {
+func (m *memtable) GetSize() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.entries)
 }
 
-func (m *Memtable) IsFull() bool {
+func (m *memtable) IsFull() bool {
 	return m.GetSize() >= m.size
 }
 
-func (m *Memtable) Clear() {
+func (m *memtable) Clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.entries = make([]Entry, 0)

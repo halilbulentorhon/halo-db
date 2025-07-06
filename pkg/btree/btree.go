@@ -8,29 +8,37 @@ import (
 
 var ErrKeyNotFound = errors.New("key not found")
 
-type BPlusTree struct {
-	Root        *Node
-	BloomFilter *bloom.BloomFilter
+type BTree interface {
+	Insert(key types.Key, value types.Value) error
+	Find(key types.Key) (types.Value, error)
+	Delete(key types.Key) error
+	SkipBloomFilter(skip bool)
+	List() []types.Key
+}
+
+type bPlusTree struct {
+	root        *node
+	bloomFilter *bloom.BloomFilter
 	skipBloom   bool
 }
 
-func NewBPlusTree() *BPlusTree {
+func NewBPlusTree() BTree {
 	size := bloom.EstimateSize(1000, 0.01)
 	hashFuncs := bloom.EstimateHashFunctions(size, 1000)
-	return &BPlusTree{
-		BloomFilter: bloom.NewBloomFilter(size, hashFuncs),
+	return &bPlusTree{
+		bloomFilter: bloom.NewBloomFilter(size, hashFuncs),
 	}
 }
 
-func (t *BPlusTree) SkipBloomFilter(skip bool) {
+func (t *bPlusTree) SkipBloomFilter(skip bool) {
 	t.skipBloom = skip
 }
 
-func (t *BPlusTree) Insert(key types.Key, value types.Value) error {
-	if t.Root == nil {
-		t.Root = newLeafNode()
-		t.Root.InsertKeyValue(key, value)
-		t.BloomFilter.Add(string(key))
+func (t *bPlusTree) Insert(key types.Key, value types.Value) error {
+	if t.root == nil {
+		t.root = newLeafNode()
+		t.root.InsertKeyValue(key, value)
+		t.bloomFilter.Add(key)
 		return nil
 	}
 
@@ -41,22 +49,22 @@ func (t *BPlusTree) Insert(key types.Key, value types.Value) error {
 
 	if !leaf.IsFull() {
 		leaf.InsertKeyValue(key, value)
-		t.BloomFilter.Add(string(key))
+		t.bloomFilter.Add(key)
 		return nil
 	}
 
 	if err := t.insertIntoLeafAfterSplitting(leaf, key, value); err != nil {
 		return err
 	}
-	t.BloomFilter.Add(string(key))
+	t.bloomFilter.Add(key)
 	return nil
 }
 
-func (t *BPlusTree) Find(key types.Key) (types.Value, error) {
-	if !t.skipBloom && !t.BloomFilter.Contains(string(key)) {
+func (t *bPlusTree) Find(key types.Key) (types.Value, error) {
+	if !t.skipBloom && !t.bloomFilter.Contains(string(key)) {
 		return nil, ErrKeyNotFound
 	}
-	if t.Root == nil {
+	if t.root == nil {
 		return nil, ErrKeyNotFound
 	}
 	leaf := t.findLeaf(key)
@@ -71,8 +79,8 @@ func (t *BPlusTree) Find(key types.Key) (types.Value, error) {
 	return value, nil
 }
 
-func (t *BPlusTree) Delete(key types.Key) error {
-	if t.Root == nil {
+func (t *bPlusTree) Delete(key types.Key) error {
+	if t.root == nil {
 		return ErrKeyNotFound
 	}
 	leaf := t.findLeaf(key)
@@ -81,25 +89,46 @@ func (t *BPlusTree) Delete(key types.Key) error {
 	}
 
 	if leaf.DeleteKey(key) {
-		t.BloomFilter.Clear()
+		t.bloomFilter.Clear()
 		return nil
 	}
 	return ErrKeyNotFound
 }
 
-func (t *BPlusTree) findLeaf(key types.Key) *Node {
-	if t.Root == nil {
+func (t *bPlusTree) List() []types.Key {
+	if t.root == nil {
+		return []types.Key{}
+	}
+	return t.collectAllKeys(t.root)
+}
+
+func (t *bPlusTree) collectAllKeys(node *node) []types.Key {
+	var keys []types.Key
+
+	if node.isLeaf {
+		keys = append(keys, node.keys...)
+	} else {
+		for _, child := range node.children {
+			keys = append(keys, t.collectAllKeys(child)...)
+		}
+	}
+
+	return keys
+}
+
+func (t *bPlusTree) findLeaf(key types.Key) *node {
+	if t.root == nil {
 		return nil
 	}
-	current := t.Root
-	for !current.IsLeaf {
+	current := t.root
+	for !current.isLeaf {
 		childIndex := current.FindChildIndex(key)
-		current = current.Children[childIndex]
+		current = current.children[childIndex]
 	}
 	return current
 }
 
-func (t *BPlusTree) insertIntoLeafAfterSplitting(leaf *Node, key types.Key, value types.Value) error {
+func (t *bPlusTree) insertIntoLeafAfterSplitting(leaf *node, key types.Key, value types.Value) error {
 	newLeaf, promotedKey := leaf.SplitWithKey(key, value)
 	if newLeaf == nil {
 		return errors.New("failed to split leaf")
@@ -108,12 +137,12 @@ func (t *BPlusTree) insertIntoLeafAfterSplitting(leaf *Node, key types.Key, valu
 	return t.insertIntoParent(leaf, promotedKey, newLeaf)
 }
 
-func (t *BPlusTree) insertIntoParent(left *Node, key types.Key, right *Node) error {
-	if left.Parent == nil {
+func (t *bPlusTree) insertIntoParent(left *node, key types.Key, right *node) error {
+	if left.parent == nil {
 		return t.insertIntoNewRoot(left, key, right)
 	}
 
-	parent := left.Parent
+	parent := left.parent
 	leftIndex := parent.GetLeftIndex(parent, left)
 
 	if !parent.IsFull() {
@@ -123,18 +152,18 @@ func (t *BPlusTree) insertIntoParent(left *Node, key types.Key, right *Node) err
 	return t.insertIntoNodeAfterSplitting(parent, leftIndex, key, right)
 }
 
-func (t *BPlusTree) insertIntoNewRoot(left *Node, key types.Key, right *Node) error {
-	t.Root = &Node{
-		IsLeaf:   false,
-		Keys:     []types.Key{key},
-		Children: []*Node{left, right},
+func (t *bPlusTree) insertIntoNewRoot(left *node, key types.Key, right *node) error {
+	t.root = &node{
+		isLeaf:   false,
+		keys:     []types.Key{key},
+		children: []*node{left, right},
 	}
-	left.Parent = t.Root
-	right.Parent = t.Root
+	left.parent = t.root
+	right.parent = t.root
 	return nil
 }
 
-func (t *BPlusTree) insertIntoNodeAfterSplitting(oldNode *Node, leftIndex int, key types.Key, right *Node) error {
+func (t *bPlusTree) insertIntoNodeAfterSplitting(oldNode *node, leftIndex int, key types.Key, right *node) error {
 	newNode, promotedKey := oldNode.SplitInternalWithKey(leftIndex, key, right)
 	if newNode == nil {
 		return errors.New("failed to split internal node")
@@ -143,6 +172,6 @@ func (t *BPlusTree) insertIntoNodeAfterSplitting(oldNode *Node, leftIndex int, k
 	return t.insertIntoParent(oldNode, promotedKey, newNode)
 }
 
-func newLeafNode() *Node {
-	return &Node{IsLeaf: true}
+func newLeafNode() *node {
+	return &node{isLeaf: true}
 }

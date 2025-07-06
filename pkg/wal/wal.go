@@ -23,13 +23,21 @@ type LogEntry struct {
 	Timestamp int64       `json:"timestamp"`
 }
 
-type WAL struct {
+type WAL interface {
+	LogInsert(key types.Key, value types.Value) error
+	LogDelete(key types.Key) error
+	Replay(insertHandler func(types.Key, types.Value) error, deleteHandler func(types.Key) error) error
+	Close() error
+	Clear() error
+}
+
+type wal struct {
 	filePath string
 	file     *os.File
 	mu       sync.Mutex
 }
 
-func NewWAL(dataDir string) (*WAL, error) {
+func NewWAL(dataDir string) (WAL, error) {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
@@ -41,13 +49,13 @@ func NewWAL(dataDir string) (*WAL, error) {
 		return nil, fmt.Errorf("failed to open WAL file: %w", err)
 	}
 
-	return &WAL{
+	return &wal{
 		filePath: filePath,
 		file:     file,
 	}, nil
 }
 
-func (w *WAL) LogInsert(key types.Key, value types.Value) error {
+func (w *wal) LogInsert(key types.Key, value types.Value) error {
 	entry := LogEntry{
 		Operation: OpInsert,
 		Key:       key,
@@ -57,7 +65,7 @@ func (w *WAL) LogInsert(key types.Key, value types.Value) error {
 	return w.logEntry(entry)
 }
 
-func (w *WAL) LogDelete(key types.Key) error {
+func (w *wal) LogDelete(key types.Key) error {
 	entry := LogEntry{
 		Operation: OpDelete,
 		Key:       key,
@@ -66,7 +74,7 @@ func (w *WAL) LogDelete(key types.Key) error {
 	return w.logEntry(entry)
 }
 
-func (w *WAL) logEntry(entry LogEntry) error {
+func (w *wal) logEntry(entry LogEntry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -89,7 +97,7 @@ func (w *WAL) logEntry(entry LogEntry) error {
 	return w.file.Sync()
 }
 
-func (w *WAL) Replay(insertHandler func(types.Key, types.Value) error, deleteHandler func(types.Key) error) error {
+func (w *wal) Replay(insertHandler func(types.Key, types.Value) error, deleteHandler func(types.Key) error) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -149,7 +157,7 @@ func (w *WAL) Replay(insertHandler func(types.Key, types.Value) error, deleteHan
 	return nil
 }
 
-func (w *WAL) Close() error {
+func (w *wal) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -159,7 +167,7 @@ func (w *WAL) Close() error {
 	return nil
 }
 
-func (w *WAL) Clear() error {
+func (w *wal) Clear() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 

@@ -1,29 +1,35 @@
 package store
 
 import (
-	"errors"
 	"fmt"
 	"halo-db/pkg/btree"
 	"halo-db/pkg/memtable"
 	"halo-db/pkg/types"
 	"halo-db/pkg/wal"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
 
-type Store struct {
-	tree     *btree.BPlusTree
-	memtable *memtable.Memtable
-	wal      *wal.WAL
+type Store interface {
+	Put(key types.Key, value types.Value) error
+	Get(key types.Key) (types.Value, error)
+	Delete(key types.Key) error
+	List() []types.Key
+	Close() error
+	Clear() error
+	GetStats() map[string]interface{}
+}
+
+type store struct {
+	tree     btree.BTree
+	memtable memtable.Memtable
+	wal      wal.WAL
 	dataDir  string
 	mu       sync.RWMutex
 	stopChan chan struct{}
 }
 
-func NewStore(dataDir string) (*Store, error) {
+func NewStore(dataDir string) (Store, error) {
 	tree := btree.NewBPlusTree()
 	mTable := memtable.NewMemtable(1000)
 
@@ -32,7 +38,7 @@ func NewStore(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("failed to create WAL: %w", err)
 	}
 
-	store := &Store{
+	store := &store{
 		tree:     tree,
 		memtable: mTable,
 		wal:      w,
@@ -49,7 +55,7 @@ func NewStore(dataDir string) (*Store, error) {
 	return store, nil
 }
 
-func (s *Store) Put(key types.Key, value types.Value) error {
+func (s *store) Put(key types.Key, value types.Value) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -68,7 +74,7 @@ func (s *Store) Put(key types.Key, value types.Value) error {
 	return nil
 }
 
-func (s *Store) Get(key types.Key) (types.Value, error) {
+func (s *store) Get(key types.Key) (types.Value, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -82,7 +88,7 @@ func (s *Store) Get(key types.Key) (types.Value, error) {
 	return s.tree.Find(key)
 }
 
-func (s *Store) Delete(key types.Key) error {
+func (s *store) Delete(key types.Key) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -101,16 +107,14 @@ func (s *Store) Delete(key types.Key) error {
 	return nil
 }
 
-func (s *Store) List() []types.Key {
+func (s *store) List() []types.Key {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	keys := make(map[types.Key]bool)
 
-	if s.tree.Root != nil {
-		for _, key := range s.collectAllKeys(s.tree.Root) {
-			keys[key] = true
-		}
+	for _, key := range s.tree.List() {
+		keys[key] = true
 	}
 
 	for _, entry := range s.memtable.GetAllEntries() {
@@ -129,16 +133,12 @@ func (s *Store) List() []types.Key {
 	return result
 }
 
-func (s *Store) GetTree() *btree.BPlusTree {
-	return s.tree
-}
-
-func (s *Store) Close() error {
+func (s *store) Close() error {
 	close(s.stopChan)
 	return s.wal.Close()
 }
 
-func (s *Store) Clear() error {
+func (s *store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -152,7 +152,7 @@ func (s *Store) Clear() error {
 	return nil
 }
 
-func (s *Store) flushMemtable() error {
+func (s *store) flushMemtable() error {
 	entries := s.memtable.GetAllEntries()
 
 	for _, entry := range entries {
@@ -171,7 +171,7 @@ func (s *Store) flushMemtable() error {
 	return nil
 }
 
-func (s *Store) backgroundFlush() {
+func (s *store) backgroundFlush() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -192,7 +192,7 @@ func (s *Store) backgroundFlush() {
 	}
 }
 
-func (s *Store) replayWAL() error {
+func (s *store) replayWAL() error {
 	s.tree.SkipBloomFilter(true)
 	defer s.tree.SkipBloomFilter(false)
 
@@ -201,48 +201,20 @@ func (s *Store) replayWAL() error {
 	}
 
 	deleteHandler := func(key types.Key) error {
-		err := s.tree.Delete(key)
-		if err != nil && (errors.Is(err, btree.ErrKeyNotFound) || strings.Contains(err.Error(), "key not found")) {
-			return nil
-		}
-		return err
+		return s.tree.Delete(key)
 	}
 
 	return s.wal.Replay(insertHandler, deleteHandler)
 }
 
-func (s *Store) collectAllKeys(node *btree.Node) []types.Key {
-	var keys []types.Key
-
-	if node.IsLeaf {
-		keys = append(keys, node.Keys...)
-	} else {
-		for _, child := range node.Children {
-			keys = append(keys, s.collectAllKeys(child)...)
-		}
-	}
-
-	return keys
-}
-
-func (s *Store) GetStats() map[string]interface{} {
+func (s *store) GetStats() map[string]interface{} {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	keys := s.List()
-
-	walPath := filepath.Join(s.dataDir, "wal.log")
-	fileInfo, err := os.Stat(walPath)
-	walSize := int64(0)
-	if err == nil {
-		walSize = fileInfo.Size()
-	}
-
 	return map[string]interface{}{
-		"total_keys":    len(keys),
 		"memtable_size": s.memtable.GetSize(),
-		"wal_size":      walSize,
 		"data_dir":      s.dataDir,
+		"wal_enabled":   true,
 		"bloom_filter":  "enabled",
 	}
 }

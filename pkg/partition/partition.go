@@ -2,92 +2,74 @@ package partition
 
 import (
 	"fmt"
-	"halo-db/pkg/btree"
-	"halo-db/pkg/constants"
-	"halo-db/pkg/memtable"
+	"halo-db/pkg/store"
 	"halo-db/pkg/types"
-	"halo-db/pkg/wal"
 	"sync"
 )
 
-type Partition struct {
-	ID       int
-	Tree     *btree.BPlusTree
-	Memtable *memtable.Memtable
-	WAL      *wal.WAL
-	mu       sync.RWMutex
+type Partition interface {
+	Put(key types.Key, value types.Value) error
+	Get(key types.Key) (types.Value, error)
+	Delete(key types.Key) error
+	List() []types.Key
+	Clear() error
+	Close() error
+	GetID() int
 }
 
-func NewPartition(id int, dataDir string) (*Partition, error) {
-	tree := btree.NewBPlusTree()
-	memtable := memtable.NewMemtable(constants.MemtableSize)
+type partition struct {
+	ID    int
+	store store.Store
+	mu    sync.RWMutex
+}
+
+func NewPartition(id int, dataDir string) (Partition, error) {
 	partitionDataDir := fmt.Sprintf("%s/partition_%d", dataDir, id)
-	walPath := partitionDataDir
-	wal, err := wal.NewWAL(walPath)
+	st, err := store.NewStore(partitionDataDir)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Partition{
-		ID:       id,
-		Tree:     tree,
-		Memtable: memtable,
-		WAL:      wal,
+	return &partition{
+		ID:    id,
+		store: st,
 	}, nil
 }
 
-func (p *Partition) flushMemtable() error {
-	entries := p.Memtable.GetAllEntries()
-
-	p.Tree.SkipBloomFilter(true)
-	defer p.Tree.SkipBloomFilter(false)
-
-	for _, entry := range entries {
-		if err := p.Tree.Insert(entry.Key, entry.Value); err != nil {
-			return err
-		}
-		p.Tree.BloomFilter.Add(string(entry.Key))
-	}
-
-	p.Memtable.Clear()
-	return nil
+func (p *partition) Put(key types.Key, value types.Value) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.store.Put(key, value)
 }
 
-func (p *Partition) List() []types.Key {
-	var keys []types.Key
-
-	if p.Tree.Root != nil {
-		keys = append(keys, p.collectAllKeys(p.Tree.Root)...)
-	}
-
-	for _, entry := range p.Memtable.GetAllEntries() {
-		keys = append(keys, entry.Key)
-	}
-
-	return keys
+func (p *partition) Get(key types.Key) (types.Value, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.store.Get(key)
 }
 
-func (p *Partition) collectAllKeys(node *btree.Node) []types.Key {
-	var keys []types.Key
-
-	if node.IsLeaf {
-		keys = append(keys, node.Keys...)
-	} else {
-		for _, child := range node.Children {
-			keys = append(keys, p.collectAllKeys(child)...)
-		}
-	}
-
-	return keys
+func (p *partition) Delete(key types.Key) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.store.Delete(key)
 }
 
-func (p *Partition) replayWAL() error {
-	return p.WAL.Replay(
-		func(key types.Key, value types.Value) error {
-			return p.Tree.Insert(key, value)
-		},
-		func(key types.Key) error {
-			return p.Tree.Delete(key)
-		},
-	)
+func (p *partition) List() []types.Key {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.store.List()
+}
+
+func (p *partition) Clear() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.store.Clear()
+}
+
+func (p *partition) Close() error {
+	return p.store.Close()
+}
+
+func (p *partition) GetID() int {
+	return p.ID
 }

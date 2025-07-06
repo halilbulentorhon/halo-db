@@ -59,7 +59,7 @@ func TestPartitionDistribution(t *testing.T) {
 
 	for _, key := range keys {
 		partition := pm.GetPartition(key)
-		partitionMap[partition.ID] = append(partitionMap[partition.ID], key)
+		partitionMap[partition.GetID()] = append(partitionMap[partition.GetID()], key)
 	}
 
 	t.Logf("Partition distribution: %v", partitionMap)

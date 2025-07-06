@@ -53,7 +53,7 @@ func main() {
 				fmt.Println("Usage: put <key> <value>")
 				continue
 			}
-			key := types.Key(parts[1])
+			key := parts[1]
 			value := types.Value(parts[2])
 			if err := pm.Put(key, value); err != nil {
 				fmt.Printf("Error: %v\n", err)
@@ -65,7 +65,7 @@ func main() {
 				fmt.Println("Usage: get <key>")
 				continue
 			}
-			key := types.Key(parts[1])
+			key := parts[1]
 			value, err := pm.Get(key)
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
@@ -77,7 +77,7 @@ func main() {
 				fmt.Println("Usage: delete <key>")
 				continue
 			}
-			key := types.Key(parts[1])
+			key := parts[1]
 			if err := pm.Delete(key); err != nil {
 				fmt.Printf("Error: %v\n", err)
 			} else {

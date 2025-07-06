@@ -5,72 +5,61 @@ import (
 	"halo-db/pkg/types"
 )
 
-type Node struct {
-	IsLeaf   bool
-	Keys     []types.Key
-	Values   []types.Value
-	Children []*Node
-	Next     *Node
-	Parent   *Node
+type node struct {
+	isLeaf   bool
+	keys     []types.Key
+	values   []types.Value
+	children []*node
+	next     *node
+	parent   *node
 }
 
-func (n *Node) IsFull() bool {
-	return len(n.Keys) >= constants.MaxKeys
+func (n *node) IsFull() bool {
+	return len(n.keys) >= constants.MaxKeys
 }
 
-func (n *Node) InsertKeyValue(key types.Key, value types.Value) {
-	if !n.IsLeaf {
+func (n *node) InsertIntoNode(leftIndex int, key types.Key, right *node) error {
+	n.shiftKeysAndChildren(leftIndex)
+	n.keys[leftIndex] = key
+	n.children[leftIndex+1] = right
+	right.parent = n
+	return nil
+}
+
+func (n *node) InsertKeyValue(key types.Key, value types.Value) {
+	if !n.isLeaf {
 		return
 	}
 
 	insertPosition := n.findInsertPosition(key)
 
-	if insertPosition < len(n.Keys) && n.Keys[insertPosition] == key {
-		n.Values[insertPosition] = value
+	if insertPosition < len(n.keys) && n.keys[insertPosition] == key {
+		n.values[insertPosition] = value
 		return
 	}
 
 	n.insertAtPosition(insertPosition, key, value)
 }
 
-func (n *Node) findInsertPosition(key types.Key) int {
-	insertPosition := 0
-	for insertPosition < len(n.Keys) && n.Keys[insertPosition] < key {
-		insertPosition++
-	}
-	return insertPosition
-}
-
-func (n *Node) insertAtPosition(position int, key types.Key, value types.Value) {
-	n.Keys = append(n.Keys, "")
-	n.Values = append(n.Values, nil)
-
-	copy(n.Keys[position+1:], n.Keys[position:])
-	copy(n.Values[position+1:], n.Values[position:])
-
-	n.Keys[position] = key
-	n.Values[position] = value
-}
-
-func (n *Node) GetValue(key types.Key) (types.Value, bool) {
-	if !n.IsLeaf {
+func (n *node) GetValue(key types.Key) (types.Value, bool) {
+	if !n.isLeaf {
 		return nil, false
 	}
 
-	for i, existingKey := range n.Keys {
+	for i, existingKey := range n.keys {
 		if existingKey == key {
-			return n.Values[i], true
+			return n.values[i], true
 		}
 	}
 	return nil, false
 }
 
-func (n *Node) DeleteKey(key types.Key) bool {
-	if !n.IsLeaf {
+func (n *node) DeleteKey(key types.Key) bool {
+	if !n.isLeaf {
 		return false
 	}
 
-	for i, existingKey := range n.Keys {
+	for i, existingKey := range n.keys {
 		if existingKey == key {
 			n.removeAtPosition(i)
 			return true
@@ -79,21 +68,16 @@ func (n *Node) DeleteKey(key types.Key) bool {
 	return false
 }
 
-func (n *Node) removeAtPosition(position int) {
-	n.Keys = append(n.Keys[:position], n.Keys[position+1:]...)
-	n.Values = append(n.Values[:position], n.Values[position+1:]...)
-}
-
-func (n *Node) FindChildIndex(key types.Key) int {
+func (n *node) FindChildIndex(key types.Key) int {
 	childIndex := 0
-	for childIndex < len(n.Keys) && key >= n.Keys[childIndex] {
+	for childIndex < len(n.keys) && key >= n.keys[childIndex] {
 		childIndex++
 	}
 	return childIndex
 }
 
-func (n *Node) SplitWithKey(key types.Key, value types.Value) (*Node, types.Key) {
-	if !n.IsLeaf {
+func (n *node) SplitWithKey(key types.Key, value types.Value) (*node, types.Key) {
+	if !n.isLeaf {
 		return nil, ""
 	}
 
@@ -103,59 +87,11 @@ func (n *Node) SplitWithKey(key types.Key, value types.Value) (*Node, types.Key)
 	n.updateWithLeftHalf(tempKeys, tempValues, splitPoint)
 	newLeaf := n.createNewLeaf(tempKeys, tempValues, splitPoint)
 
-	return newLeaf, newLeaf.Keys[0]
+	return newLeaf, newLeaf.keys[0]
 }
 
-func (n *Node) prepareTempArrays(key types.Key, value types.Value) ([]types.Key, []types.Value) {
-	keyCount := len(n.Keys)
-	tempKeys := make([]types.Key, keyCount+1)
-	tempValues := make([]types.Value, keyCount+1)
-
-	keyInserted := false
-	tempIndex := 0
-
-	for i := 0; i < keyCount; i++ {
-		if !keyInserted && key < n.Keys[i] {
-			tempKeys[tempIndex] = key
-			tempValues[tempIndex] = value
-			tempIndex++
-			keyInserted = true
-		}
-		tempKeys[tempIndex] = n.Keys[i]
-		tempValues[tempIndex] = n.Values[i]
-		tempIndex++
-	}
-
-	if !keyInserted {
-		tempKeys[tempIndex] = key
-		tempValues[tempIndex] = value
-	}
-
-	return tempKeys, tempValues
-}
-
-func (n *Node) calculateSplitPoint(totalKeys int) int {
-	return totalKeys / 2
-}
-
-func (n *Node) updateWithLeftHalf(tempKeys []types.Key, tempValues []types.Value, splitPoint int) {
-	n.Keys = append([]types.Key{}, tempKeys[:splitPoint]...)
-	n.Values = append([]types.Value{}, tempValues[:splitPoint]...)
-}
-
-func (n *Node) createNewLeaf(tempKeys []types.Key, tempValues []types.Value, splitPoint int) *Node {
-	newLeaf := &Node{IsLeaf: true}
-	newLeaf.Keys = append([]types.Key{}, tempKeys[splitPoint:]...)
-	newLeaf.Values = append([]types.Value{}, tempValues[splitPoint:]...)
-	newLeaf.Next = n.Next
-	newLeaf.Parent = n.Parent
-	n.Next = newLeaf
-
-	return newLeaf
-}
-
-func (n *Node) SplitInternalWithKey(leftIndex int, key types.Key, right *Node) (*Node, types.Key) {
-	if n.IsLeaf {
+func (n *node) SplitInternalWithKey(leftIndex int, key types.Key, right *node) (*node, types.Key) {
+	if n.isLeaf {
 		return nil, ""
 	}
 
@@ -169,10 +105,90 @@ func (n *Node) SplitInternalWithKey(leftIndex int, key types.Key, right *Node) (
 	return newNode, promotedKey
 }
 
-func (n *Node) prepareInternalTempArrays(leftIndex int, key types.Key, right *Node) ([]types.Key, []*Node) {
-	keyCount := len(n.Keys)
+func (n *node) GetLeftIndex(parent, left *node) int {
+	leftIndex := 0
+	for leftIndex <= len(parent.keys) && parent.children[leftIndex] != left {
+		leftIndex++
+	}
+	return leftIndex
+}
+
+func (n *node) findInsertPosition(key types.Key) int {
+	insertPosition := 0
+	for insertPosition < len(n.keys) && n.keys[insertPosition] < key {
+		insertPosition++
+	}
+	return insertPosition
+}
+
+func (n *node) insertAtPosition(position int, key types.Key, value types.Value) {
+	n.keys = append(n.keys, "")
+	n.values = append(n.values, nil)
+
+	copy(n.keys[position+1:], n.keys[position:])
+	copy(n.values[position+1:], n.values[position:])
+
+	n.keys[position] = key
+	n.values[position] = value
+}
+
+func (n *node) removeAtPosition(position int) {
+	n.keys = append(n.keys[:position], n.keys[position+1:]...)
+	n.values = append(n.values[:position], n.values[position+1:]...)
+}
+
+func (n *node) prepareTempArrays(key types.Key, value types.Value) ([]types.Key, []types.Value) {
+	keyCount := len(n.keys)
 	tempKeys := make([]types.Key, keyCount+1)
-	tempChildren := make([]*Node, keyCount+2)
+	tempValues := make([]types.Value, keyCount+1)
+
+	keyInserted := false
+	tempIndex := 0
+
+	for i := 0; i < keyCount; i++ {
+		if !keyInserted && key < n.keys[i] {
+			tempKeys[tempIndex] = key
+			tempValues[tempIndex] = value
+			tempIndex++
+			keyInserted = true
+		}
+		tempKeys[tempIndex] = n.keys[i]
+		tempValues[tempIndex] = n.values[i]
+		tempIndex++
+	}
+
+	if !keyInserted {
+		tempKeys[tempIndex] = key
+		tempValues[tempIndex] = value
+	}
+
+	return tempKeys, tempValues
+}
+
+func (n *node) calculateSplitPoint(totalKeys int) int {
+	return totalKeys / 2
+}
+
+func (n *node) updateWithLeftHalf(tempKeys []types.Key, tempValues []types.Value, splitPoint int) {
+	n.keys = append([]types.Key{}, tempKeys[:splitPoint]...)
+	n.values = append([]types.Value{}, tempValues[:splitPoint]...)
+}
+
+func (n *node) createNewLeaf(tempKeys []types.Key, tempValues []types.Value, splitPoint int) *node {
+	newLeaf := &node{isLeaf: true}
+	newLeaf.keys = append([]types.Key{}, tempKeys[splitPoint:]...)
+	newLeaf.values = append([]types.Value{}, tempValues[splitPoint:]...)
+	newLeaf.next = n.next
+	newLeaf.parent = n.parent
+	n.next = newLeaf
+
+	return newLeaf
+}
+
+func (n *node) prepareInternalTempArrays(leftIndex int, key types.Key, right *node) ([]types.Key, []*node) {
+	keyCount := len(n.keys)
+	tempKeys := make([]types.Key, keyCount+1)
+	tempChildren := make([]*node, keyCount+2)
 
 	n.copyChildrenToTemp(tempChildren, leftIndex, right)
 	n.copyKeysToTemp(tempKeys, leftIndex, key)
@@ -180,78 +196,62 @@ func (n *Node) prepareInternalTempArrays(leftIndex int, key types.Key, right *No
 	return tempKeys, tempChildren
 }
 
-func (n *Node) copyChildrenToTemp(tempChildren []*Node, leftIndex int, right *Node) {
-	for i, j := 0, 0; i < len(n.Children)+1; i++ {
+func (n *node) copyChildrenToTemp(tempChildren []*node, leftIndex int, right *node) {
+	for i, j := 0, 0; i < len(n.children)+1; i++ {
 		if i == leftIndex+1 {
 			tempChildren[j] = right
 			j++
 		}
-		if i < len(n.Children) {
-			tempChildren[j] = n.Children[i]
+		if i < len(n.children) {
+			tempChildren[j] = n.children[i]
 			j++
 		}
 	}
 }
 
-func (n *Node) copyKeysToTemp(tempKeys []types.Key, leftIndex int, key types.Key) {
-	for i, j := 0, 0; i < len(n.Keys)+1; i++ {
+func (n *node) copyKeysToTemp(tempKeys []types.Key, leftIndex int, key types.Key) {
+	for i, j := 0, 0; i < len(n.keys)+1; i++ {
 		if i == leftIndex {
 			tempKeys[j] = key
 			j++
 		}
-		if i < len(n.Keys) {
-			tempKeys[j] = n.Keys[i]
+		if i < len(n.keys) {
+			tempKeys[j] = n.keys[i]
 			j++
 		}
 	}
 }
 
-func (n *Node) updateInternalWithLeftHalf(tempKeys []types.Key, tempChildren []*Node, splitPoint int) {
-	n.Keys = append([]types.Key{}, tempKeys[:splitPoint-1]...)
-	n.Children = append([]*Node{}, tempChildren[:splitPoint]...)
+func (n *node) updateInternalWithLeftHalf(tempKeys []types.Key, tempChildren []*node, splitPoint int) {
+	n.keys = append([]types.Key{}, tempKeys[:splitPoint-1]...)
+	n.children = append([]*node{}, tempChildren[:splitPoint]...)
 }
 
-func (n *Node) createNewInternalNode(tempKeys []types.Key, tempChildren []*Node, splitPoint int) *Node {
-	newNode := &Node{IsLeaf: false}
-	newNode.Keys = append([]types.Key{}, tempKeys[splitPoint:]...)
-	newNode.Children = append([]*Node{}, tempChildren[splitPoint:]...)
-	newNode.Parent = n.Parent
+func (n *node) createNewInternalNode(tempKeys []types.Key, tempChildren []*node, splitPoint int) *node {
+	newNode := &node{isLeaf: false}
+	newNode.keys = append([]types.Key{}, tempKeys[splitPoint:]...)
+	newNode.children = append([]*node{}, tempChildren[splitPoint:]...)
+	newNode.parent = n.parent
 
 	n.updateChildrenParent(newNode)
 
 	return newNode
 }
 
-func (n *Node) updateChildrenParent(newNode *Node) {
-	for _, child := range newNode.Children {
+func (n *node) updateChildrenParent(newNode *node) {
+	for _, child := range newNode.children {
 		if child != nil {
-			child.Parent = newNode
+			child.parent = newNode
 		}
 	}
 }
 
-func (n *Node) InsertIntoNode(leftIndex int, key types.Key, right *Node) error {
-	n.shiftKeysAndChildren(leftIndex)
-	n.Keys[leftIndex] = key
-	n.Children[leftIndex+1] = right
-	right.Parent = n
-	return nil
-}
+func (n *node) shiftKeysAndChildren(leftIndex int) {
+	n.keys = append(n.keys, "")
+	n.children = append(n.children, nil)
 
-func (n *Node) shiftKeysAndChildren(leftIndex int) {
-	n.Keys = append(n.Keys, "")
-	n.Children = append(n.Children, nil)
-
-	for i := len(n.Keys) - 1; i > leftIndex; i-- {
-		n.Keys[i] = n.Keys[i-1]
-		n.Children[i+1] = n.Children[i]
+	for i := len(n.keys) - 1; i > leftIndex; i-- {
+		n.keys[i] = n.keys[i-1]
+		n.children[i+1] = n.children[i]
 	}
-}
-
-func (n *Node) GetLeftIndex(parent, left *Node) int {
-	leftIndex := 0
-	for leftIndex <= len(parent.Keys) && parent.Children[leftIndex] != left {
-		leftIndex++
-	}
-	return leftIndex
 }
